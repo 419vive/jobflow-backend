@@ -1,6 +1,7 @@
 package com.jobflow.backend.application;
 
 import com.jobflow.backend.domain.ApplicationStatus;
+import com.jobflow.backend.domain.ApplicationStatusHistory;
 import com.jobflow.backend.domain.JobApplication;
 import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.data.domain.Page;
@@ -11,23 +12,28 @@ import org.springframework.transaction.support.TransactionOperations;
 import org.springframework.transaction.support.TransactionSynchronization;
 import org.springframework.transaction.support.TransactionSynchronizationManager;
 
+import java.util.List;
 import java.util.UUID;
+import java.util.stream.Collectors;
 
 @Service
 public class ApplicationService {
 
     private final ApplicationRepository repository;
+    private final ApplicationStatusHistoryRepository statusHistoryRepository;
     private final ApplicationStatusPolicy statusPolicy;
     private final ApplicationSummaryCache summaryCache;
     private final TransactionOperations transactions;
 
     public ApplicationService(
             ApplicationRepository repository,
+            ApplicationStatusHistoryRepository statusHistoryRepository,
             ApplicationStatusPolicy statusPolicy,
             ApplicationSummaryCache summaryCache,
             TransactionOperations transactions
     ) {
         this.repository = repository;
+        this.statusHistoryRepository = statusHistoryRepository;
         this.statusPolicy = statusPolicy;
         this.summaryCache = summaryCache;
         this.transactions = transactions;
@@ -64,12 +70,28 @@ public class ApplicationService {
 
     @Transactional
     public ApplicationView changeStatus(UUID id, ApplicationStatus nextStatus) {
+        return changeStatus(id, nextStatus, null);
+    }
+
+    @Transactional
+    public ApplicationView changeStatus(UUID id, ApplicationStatus nextStatus, String reason) {
         JobApplication application = repository.findById(id)
                 .orElseThrow(() -> new ApplicationNotFoundException(id));
 
-        statusPolicy.requireAllowed(application.getStatus(), nextStatus);
+        ApplicationStatus currentStatus = application.getStatus();
+        statusPolicy.requireAllowed(currentStatus, nextStatus);
+        if (currentStatus == nextStatus) {
+            return ApplicationView.from(application);
+        }
+
         application.changeStatus(nextStatus);
         JobApplication saved = repository.save(application);
+        statusHistoryRepository.save(ApplicationStatusHistory.transition(
+                saved.getId(),
+                currentStatus,
+                nextStatus,
+                reason
+        ));
         evictSummaryAfterCommit();
         return ApplicationView.from(saved);
     }
@@ -102,6 +124,16 @@ public class ApplicationService {
         });
     }
 
+    @Transactional(readOnly = true)
+    public List<ApplicationStatusHistoryView> statusHistory(UUID id) {
+        repository.findById(id)
+                .orElseThrow(() -> new ApplicationNotFoundException(id));
+
+        return statusHistoryRepository.findByApplicationId(id).stream()
+                .map(ApplicationStatusHistoryView::from)
+                .collect(Collectors.toList());
+    }
+
     private ApplicationCreateResult createNew(CreateApplicationCommand command, String idempotencyKey) {
         JobApplication application = JobApplication.create(
                 command.getCompany(),
@@ -112,6 +144,7 @@ public class ApplicationService {
                 idempotencyKey
         );
         JobApplication saved = repository.save(application);
+        statusHistoryRepository.save(ApplicationStatusHistory.created(saved.getId()));
         evictSummaryAfterCommit();
         return ApplicationCreateResult.created(ApplicationView.from(saved));
     }

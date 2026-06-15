@@ -10,8 +10,8 @@ This project was built as a practical backend portfolio piece for a Java backend
 | --- | --- |
 | Java and Spring | Spring Boot REST API with service, domain, repository, and controller layers |
 | Redis | `RedisApplicationSummaryCache` caches dashboard summary data with TTL and graceful fallback |
-| SQL | Flyway migration creates the `job_applications` table, indexes, optimistic-lock version, and idempotency constraint |
-| API development | CRUD-style application tracking endpoints plus status transitions and filtering |
+| SQL | Flyway migrations create application and status-history tables, indexes, optimistic-lock version, and idempotency constraint |
+| API development | CRUD-style application tracking endpoints, status transitions, audit history, and filtering |
 | Testing | Unit tests, MockMvc API tests, and Testcontainers coverage for Postgres plus Redis |
 | Deployment | Multi-stage Dockerfile, health-checked Docker Compose, and GitHub Actions CI image build |
 | Code review | Layered commands/DTOs, validation, error responses, concurrency-safe idempotency handling |
@@ -24,6 +24,7 @@ This project was built as a practical backend portfolio piece for a Java backend
 | `GET` | `/api/applications` | List applications, optionally filtered by `status` or `remote` |
 | `GET` | `/api/applications/{id}` | Fetch one application |
 | `PATCH` | `/api/applications/{id}/status` | Move an application through the hiring pipeline |
+| `GET` | `/api/applications/{id}/status-history` | Read the immutable status-change trail |
 | `GET` | `/api/applications/summary` | Get cached pipeline counts |
 | `GET` | `/docs` | Swagger UI |
 
@@ -43,6 +44,7 @@ Backward moves are rejected with `409 Conflict` so the audit trail stays trustwo
 - Repeated `POST /api/applications` requests with the same `Idempotency-Key` return the same application. A true insert returns `201 Created`; a replay returns `200 OK`.
 - Duplicate idempotency races are handled by the database unique constraint, a flushed write, and a retry read of the winning row.
 - Status updates use optimistic locking through a JPA `@Version` column.
+- Every application records a creation event and each real status transition records `fromStatus`, `toStatus`, optional `reason`, and `changedAt`.
 - Summary-cache eviction is registered after commit so rolled-back writes do not invalidate Redis.
 - Redis failures are logged and fall back to the SQL database as the source of truth.
 - Default listing order is newest-first for stable review and paging behavior.
@@ -109,17 +111,23 @@ Change status:
 ```bash
 curl -X PATCH http://localhost:8080/api/applications/{id}/status \
   -H "Content-Type: application/json" \
-  -d '{"status":"SUBMITTED"}'
+  -d '{"status":"SUBMITTED","reason":"Submitted with Java proof repo"}'
+```
+
+Read status history:
+
+```bash
+curl http://localhost:8080/api/applications/{id}/status-history
 ```
 
 ## Architecture
 
 ```text
 web/            REST controllers, request DTOs, error responses
-application/    use cases, status policy, repository/cache ports
-domain/         JPA entity and application status model
-infrastructure/ JPA adapter and Redis cache adapter
-db/migration/   Flyway SQL migration
+application/    use cases, status policy, repository/cache/history ports
+domain/         JPA entities and application status model
+infrastructure/ JPA adapters and Redis cache adapter
+db/migration/   Flyway SQL migrations
 ```
 
 The database is authoritative. Redis is used as a fast cache for summary counts and is allowed to fail without blocking core writes.

@@ -14,6 +14,7 @@ import org.springframework.test.web.servlet.MockMvc;
 
 import static org.hamcrest.Matchers.is;
 import static org.hamcrest.Matchers.notNullValue;
+import static org.hamcrest.Matchers.nullValue;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.patch;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
@@ -153,5 +154,42 @@ class ApplicationControllerTest {
                         .content(objectMapper.writeValueAsString(new ChangeStatusRequest(ApplicationStatus.OFFER))))
                 .andExpect(status().isConflict())
                 .andExpect(jsonPath("$.error", is("illegal_status_transition")));
+    }
+
+    @Test
+    void returnsStatusHistoryForApplication() throws Exception {
+        String response = mockMvc.perform(post("/api/applications")
+                        .header("Idempotency-Key", "history-1")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(new CreateApplicationRequest(
+                                "Bruce HR",
+                                "Java Backend Engineer",
+                                "Remote",
+                                true,
+                                "Status history"
+                        ))))
+                .andExpect(status().isCreated())
+                .andReturn()
+                .getResponse()
+                .getContentAsString();
+
+        String id = objectMapper.readTree(response).get("id").asText();
+
+        mockMvc.perform(patch("/api/applications/{id}/status", id)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(new ChangeStatusRequest(
+                                ApplicationStatus.SUBMITTED,
+                                "Submitted with Java proof repo"
+                        ))))
+                .andExpect(status().isOk());
+
+        mockMvc.perform(get("/api/applications/{id}/status-history", id))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$[0].fromStatus").value(nullValue()))
+                .andExpect(jsonPath("$[0].toStatus", is("SOURCED")))
+                .andExpect(jsonPath("$[0].reason").value(nullValue()))
+                .andExpect(jsonPath("$[1].fromStatus", is("SOURCED")))
+                .andExpect(jsonPath("$[1].toStatus", is("SUBMITTED")))
+                .andExpect(jsonPath("$[1].reason", is("Submitted with Java proof repo")));
     }
 }

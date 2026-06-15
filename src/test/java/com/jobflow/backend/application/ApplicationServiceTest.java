@@ -10,6 +10,7 @@ import org.springframework.transaction.support.TransactionOperations;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.assertj.core.groups.Tuple.tuple;
 
 class ApplicationServiceTest {
 
@@ -21,9 +22,11 @@ class ApplicationServiceTest {
     };
 
     private final InMemoryApplicationRepository repository = new InMemoryApplicationRepository();
+    private final InMemoryStatusHistoryRepository historyRepository = new InMemoryStatusHistoryRepository();
     private final InMemorySummaryCache cache = new InMemorySummaryCache();
     private final ApplicationService service = new ApplicationService(
             repository,
+            historyRepository,
             new ApplicationStatusPolicy(),
             cache,
             WITHOUT_TRANSACTION
@@ -50,6 +53,13 @@ class ApplicationServiceTest {
         assertThat(created.getCreatedAt()).isNotNull();
         assertThat(created.getUpdatedAt()).isNotNull();
         assertThat(cache.wasEvicted()).isTrue();
+        assertThat(service.statusHistory(created.getId()))
+                .extracting(
+                        ApplicationStatusHistoryView::getFromStatus,
+                        ApplicationStatusHistoryView::getToStatus,
+                        ApplicationStatusHistoryView::getReason
+                )
+                .containsExactly(tuple(null, ApplicationStatus.SOURCED, null));
     }
 
     @Test
@@ -82,6 +92,7 @@ class ApplicationServiceTest {
         RaceLosingRepository repository = new RaceLosingRepository("same-key");
         ApplicationService service = new ApplicationService(
                 repository,
+                new InMemoryStatusHistoryRepository(),
                 new ApplicationStatusPolicy(),
                 new InMemorySummaryCache(),
                 WITHOUT_TRANSACTION
@@ -112,6 +123,30 @@ class ApplicationServiceTest {
 
         assertThatThrownBy(() -> service.changeStatus(created.getId(), ApplicationStatus.OFFER))
                 .isInstanceOf(IllegalStatusTransitionException.class);
+    }
+
+    @Test
+    void recordsStatusTransitionReasonInHistory() {
+        ApplicationView created = service.create(new CreateApplicationCommand(
+                "Bruce HR",
+                "Java Backend Engineer",
+                "Taiwan",
+                true,
+                "Pipeline"
+        ), null).getApplication();
+
+        service.changeStatus(created.getId(), ApplicationStatus.SUBMITTED, "Submitted with Java proof repo");
+
+        assertThat(service.statusHistory(created.getId()))
+                .extracting(
+                        ApplicationStatusHistoryView::getFromStatus,
+                        ApplicationStatusHistoryView::getToStatus,
+                        ApplicationStatusHistoryView::getReason
+                )
+                .containsExactly(
+                        tuple(null, ApplicationStatus.SOURCED, null),
+                        tuple(ApplicationStatus.SOURCED, ApplicationStatus.SUBMITTED, "Submitted with Java proof repo")
+                );
     }
 
     private static class RaceLosingRepository extends InMemoryApplicationRepository {

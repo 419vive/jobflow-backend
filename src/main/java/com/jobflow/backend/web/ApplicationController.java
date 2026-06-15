@@ -2,6 +2,7 @@ package com.jobflow.backend.web;
 
 import com.jobflow.backend.application.ApplicationCreateResult;
 import com.jobflow.backend.application.ApplicationService;
+import com.jobflow.backend.application.ApplicationStatusHistoryView;
 import com.jobflow.backend.application.ApplicationSummary;
 import com.jobflow.backend.application.ApplicationView;
 import com.jobflow.backend.application.CreateApplicationCommand;
@@ -23,6 +24,7 @@ import org.springframework.web.bind.annotation.RestController;
 
 import javax.validation.Valid;
 import java.net.URI;
+import java.util.List;
 import java.util.UUID;
 
 @RestController
@@ -75,7 +77,12 @@ public class ApplicationController {
             @PathVariable UUID id,
             @Valid @RequestBody ChangeStatusRequest request
     ) {
-        return service.changeStatus(id, request.getStatus());
+        return service.changeStatus(id, request.getStatus(), request.getReason());
+    }
+
+    @GetMapping("/{id}/status-history")
+    List<ApplicationStatusHistoryView> statusHistory(@PathVariable UUID id) {
+        return service.statusHistory(id);
     }
 
     @GetMapping("/summary")

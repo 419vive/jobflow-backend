@@ -1,6 +1,7 @@
 package com.jobflow.backend.web;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.jobflow.backend.domain.ApplicationStatus;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.autoconfigure.web.servlet.AutoConfigureMockMvc;
@@ -19,6 +20,7 @@ import org.testcontainers.utility.DockerImageName;
 import static org.hamcrest.Matchers.is;
 import static org.hamcrest.Matchers.notNullValue;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.patch;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
@@ -135,5 +137,40 @@ class PostgresRedisIntegrationTest {
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.id", is(id)))
                 .andExpect(jsonPath("$.company", is("Bruce HR")));
+    }
+
+    @Test
+    void persistsStatusHistoryInPostgres() throws Exception {
+        String response = mockMvc.perform(post("/api/applications")
+                        .header("Idempotency-Key", "postgres-history-1")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(new CreateApplicationRequest(
+                                "Bruce HR",
+                                "Java Backend Engineer",
+                                "Remote",
+                                true,
+                                "Status history"
+                        ))))
+                .andExpect(status().isCreated())
+                .andReturn()
+                .getResponse()
+                .getContentAsString();
+
+        String id = objectMapper.readTree(response).get("id").asText();
+
+        mockMvc.perform(patch("/api/applications/{id}/status", id)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(new ChangeStatusRequest(
+                                ApplicationStatus.SUBMITTED,
+                                "Submitted with Java proof repo"
+                        ))))
+                .andExpect(status().isOk());
+
+        mockMvc.perform(get("/api/applications/{id}/status-history", id))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$[0].toStatus", is("SOURCED")))
+                .andExpect(jsonPath("$[1].fromStatus", is("SOURCED")))
+                .andExpect(jsonPath("$[1].toStatus", is("SUBMITTED")))
+                .andExpect(jsonPath("$[1].reason", is("Submitted with Java proof repo")));
     }
 }
