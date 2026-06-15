@@ -21,7 +21,7 @@ public class JpaApplicationStore implements ApplicationRepository {
 
     @Override
     public JobApplication save(JobApplication application) {
-        return repository.save(application);
+        return repository.saveAndFlush(application);
     }
 
     @Override

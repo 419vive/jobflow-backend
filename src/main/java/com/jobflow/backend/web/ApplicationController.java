@@ -1,13 +1,15 @@
 package com.jobflow.backend.web;
 
+import com.jobflow.backend.application.ApplicationCreateResult;
 import com.jobflow.backend.application.ApplicationService;
 import com.jobflow.backend.application.ApplicationSummary;
 import com.jobflow.backend.application.ApplicationView;
+import com.jobflow.backend.application.CreateApplicationCommand;
 import com.jobflow.backend.domain.ApplicationStatus;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
+import org.springframework.data.domain.Sort;
 import org.springframework.data.web.PageableDefault;
-import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PatchMapping;
@@ -20,6 +22,7 @@ import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 
 import javax.validation.Valid;
+import java.net.URI;
 import java.util.UUID;
 
 @RestController
@@ -37,14 +40,27 @@ public class ApplicationController {
             @Valid @RequestBody CreateApplicationRequest request,
             @RequestHeader(value = "Idempotency-Key", required = false) String idempotencyKey
     ) {
-        return ResponseEntity.status(HttpStatus.CREATED).body(service.create(request, idempotencyKey));
+        ApplicationCreateResult result = service.create(new CreateApplicationCommand(
+                request.getCompany(),
+                request.getTitle(),
+                request.getLocation(),
+                request.isRemote(),
+                request.getNotes()
+        ), idempotencyKey);
+
+        if (!result.isCreated()) {
+            return ResponseEntity.ok(result.getApplication());
+        }
+
+        return ResponseEntity.created(URI.create("/api/applications/" + result.getApplication().getId()))
+                .body(result.getApplication());
     }
 
     @GetMapping
     Page<ApplicationView> search(
             @RequestParam(required = false) ApplicationStatus status,
             @RequestParam(required = false) Boolean remote,
-            @PageableDefault(size = 20) Pageable pageable
+            @PageableDefault(size = 20, sort = "createdAt", direction = Sort.Direction.DESC) Pageable pageable
     ) {
         return service.search(status, remote, pageable);
     }

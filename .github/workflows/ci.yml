@@ -23,3 +23,6 @@ jobs:
 
       - name: Test and package
         run: ./mvnw -B test package
+
+      - name: Build Docker image
+        run: docker build -t jobflow-backend:ci .

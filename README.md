@@ -10,11 +10,11 @@ This project was built as a practical backend portfolio piece for a Java backend
 | --- | --- |
 | Java and Spring | Spring Boot REST API with service, domain, repository, and controller layers |
 | Redis | `RedisApplicationSummaryCache` caches dashboard summary data with TTL and graceful fallback |
-| SQL | Flyway migration creates the `job_applications` table, indexes, and idempotency constraint |
+| SQL | Flyway migration creates the `job_applications` table, indexes, optimistic-lock version, and idempotency constraint |
 | API development | CRUD-style application tracking endpoints plus status transitions and filtering |
-| Testing | Unit tests for status rules and service behavior, plus MockMvc API tests |
-| Deployment | Dockerfile, Docker Compose for API/Postgres/Redis, and GitHub Actions CI |
-| Code review | Clear package boundaries, validation, error responses, idempotency key support |
+| Testing | Unit tests, MockMvc API tests, and Testcontainers coverage for Postgres plus Redis |
+| Deployment | Multi-stage Dockerfile, health-checked Docker Compose, and GitHub Actions CI image build |
+| Code review | Layered commands/DTOs, validation, error responses, concurrency-safe idempotency handling |
 
 ## API Endpoints
 
@@ -37,6 +37,15 @@ SOURCED -> APPLIED -> SUBMITTED -> INTERVIEWING -> OFFER
 ```
 
 Backward moves are rejected with `409 Conflict` so the audit trail stays trustworthy.
+
+## Production Hardening
+
+- Repeated `POST /api/applications` requests with the same `Idempotency-Key` return the same application. A true insert returns `201 Created`; a replay returns `200 OK`.
+- Duplicate idempotency races are handled by the database unique constraint, a flushed write, and a retry read of the winning row.
+- Status updates use optimistic locking through a JPA `@Version` column.
+- Summary-cache eviction is registered after commit so rolled-back writes do not invalidate Redis.
+- Redis failures are logged and fall back to the SQL database as the source of truth.
+- Default listing order is newest-first for stable review and paging behavior.
 
 ## Run Locally
 
@@ -69,6 +78,8 @@ Start with Postgres and Redis:
 ./mvnw package
 docker compose up --build
 ```
+
+The Testcontainers integration test is skipped when Docker is not running locally; GitHub Actions runs it on a Docker-capable runner.
 
 ## Example Requests
 

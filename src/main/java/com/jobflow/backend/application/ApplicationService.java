@@ -2,11 +2,14 @@ package com.jobflow.backend.application;
 
 import com.jobflow.backend.domain.ApplicationStatus;
 import com.jobflow.backend.domain.JobApplication;
-import com.jobflow.backend.web.CreateApplicationRequest;
+import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.transaction.support.TransactionOperations;
+import org.springframework.transaction.support.TransactionSynchronization;
+import org.springframework.transaction.support.TransactionSynchronizationManager;
 
 import java.util.UUID;
 
@@ -16,26 +19,47 @@ public class ApplicationService {
     private final ApplicationRepository repository;
     private final ApplicationStatusPolicy statusPolicy;
     private final ApplicationSummaryCache summaryCache;
+    private final TransactionOperations transactions;
 
     public ApplicationService(
             ApplicationRepository repository,
             ApplicationStatusPolicy statusPolicy,
-            ApplicationSummaryCache summaryCache
+            ApplicationSummaryCache summaryCache,
+            TransactionOperations transactions
     ) {
         this.repository = repository;
         this.statusPolicy = statusPolicy;
         this.summaryCache = summaryCache;
+        this.transactions = transactions;
     }
 
-    @Transactional
-    public ApplicationView create(CreateApplicationRequest request, String idempotencyKey) {
+    public ApplicationCreateResult create(CreateApplicationCommand command, String idempotencyKey) {
         String normalizedKey = JobApplication.normalizeIdempotencyKey(idempotencyKey);
         if (normalizedKey != null) {
-            return repository.findByIdempotencyKey(normalizedKey)
-                    .map(ApplicationView::from)
-                    .orElseGet(() -> createNew(request, normalizedKey));
+            ApplicationCreateResult existing = transactions.execute(status ->
+                    repository.findByIdempotencyKey(normalizedKey)
+                            .map(ApplicationView::from)
+                            .map(ApplicationCreateResult::reused)
+                            .orElse(null)
+            );
+            if (existing != null) {
+                return existing;
+            }
         }
-        return createNew(request, null);
+
+        try {
+            return transactions.execute(status -> createNew(command, normalizedKey));
+        } catch (DataIntegrityViolationException ex) {
+            if (normalizedKey == null) {
+                throw ex;
+            }
+            return transactions.execute(status ->
+                    repository.findByIdempotencyKey(normalizedKey)
+                            .map(ApplicationView::from)
+                            .map(ApplicationCreateResult::reused)
+                            .orElseThrow(() -> ex)
+            );
+        }
     }
 
     @Transactional
@@ -46,7 +70,7 @@ public class ApplicationService {
         statusPolicy.requireAllowed(application.getStatus(), nextStatus);
         application.changeStatus(nextStatus);
         JobApplication saved = repository.save(application);
-        summaryCache.evict();
+        evictSummaryAfterCommit();
         return ApplicationView.from(saved);
     }
 
@@ -78,17 +102,31 @@ public class ApplicationService {
         });
     }
 
-    private ApplicationView createNew(CreateApplicationRequest request, String idempotencyKey) {
+    private ApplicationCreateResult createNew(CreateApplicationCommand command, String idempotencyKey) {
         JobApplication application = JobApplication.create(
-                request.getCompany(),
-                request.getTitle(),
-                request.getLocation(),
-                request.isRemote(),
-                request.getNotes(),
+                command.getCompany(),
+                command.getTitle(),
+                command.getLocation(),
+                command.isRemote(),
+                command.getNotes(),
                 idempotencyKey
         );
         JobApplication saved = repository.save(application);
-        summaryCache.evict();
-        return ApplicationView.from(saved);
+        evictSummaryAfterCommit();
+        return ApplicationCreateResult.created(ApplicationView.from(saved));
+    }
+
+    private void evictSummaryAfterCommit() {
+        if (!TransactionSynchronizationManager.isSynchronizationActive()) {
+            summaryCache.evict();
+            return;
+        }
+
+        TransactionSynchronizationManager.registerSynchronization(new TransactionSynchronization() {
+            @Override
+            public void afterCommit() {
+                summaryCache.evict();
+            }
+        });
     }
 }

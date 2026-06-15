@@ -9,6 +9,7 @@ CREATE TABLE job_applications (
     idempotency_key VARCHAR(120),
     created_at TIMESTAMP NOT NULL,
     updated_at TIMESTAMP NOT NULL,
+    version BIGINT NOT NULL,
     CONSTRAINT uk_job_applications_idempotency_key UNIQUE (idempotency_key)
 );
 
